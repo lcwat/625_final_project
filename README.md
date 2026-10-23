@@ -4,16 +4,16 @@ This where the storage for all of the files related to our 625 final project wil
 ## Prerequisites
 In order to get the minimal working example running on your machine, you must have a **Google AI Studio** account (free) and the unique **Gemini API key** they provide you after setting up that account. We use Gemini for our initial analysis working example because it is the only LLM API that provides a free tier for developers. 
 1. Once you have your API key, you should paste the following in a **```.env```** file you create in the root of your cloned directory (this allows python to recognize your unique key as a local environmental variable):
--```GEMINI_API_KEY=[Insert-your-API-key-here]```
+- ```GEMINI_API_KEY=[Insert-your-API-key-here]```
 
 3. You should also create your own virtual environment to run this python project. You can initialize a virtual environment from the command line with the following:
--```python -m venv .venv```
+- ```python -m venv .venv```
 
 4. Then, you should activate the virtual environment (varies by terminal, machine, etc.), I'll show how I do it through bash/Linux (also works for Unix/Mac terminal):
--```source .venv/bin/activate```
+- ```source .venv/bin/activate```
 
 5. Last, you can easily download all of the module dependencies by loading in the requirements.txt file:
--```python -m pip install -r requirements.txt```
+- ```python -m pip install -r requirements.txt```
 
 ## Directories
 

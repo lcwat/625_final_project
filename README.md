@@ -18,4 +18,15 @@ In order to get the minimal working example running on your machine, you must ha
 ## Directories
 
 - **```/scripts```** This is where the jupyter notebooks and python files will reside to run the bulk of the analysis that connects to and prompts the AI.
+- **```/prompts```** This is where the scoring rules sent to the model as its instructions reside.
 - **```/model_output```** This is where the final ```.csv``` output files will reside.
+
+## Scoring the real transcripts
+
+```scripts/score_free_recall.py``` scores the transcripts in ```mohsen_files``` against the event codebooks, one participant and slideshow per API call. Run it from the root of the repository:
+
+- ```python scripts/score_free_recall.py --dry-run``` lists what would be sent without calling the API.
+- ```python scripts/score_free_recall.py --session 1 --participants 101 --slideshows Summer``` scores a single transcript.
+- ```python scripts/score_free_recall.py --session 1``` scores every Session 1 transcript.
+
+Each response is saved under ```model_output/raw``` so a rerun skips transcripts that are already scored (use ```--force``` to score them again). The combined table is written to ```model_output/<model>_S<session>_scoring_long.csv```.

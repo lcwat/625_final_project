@@ -10,6 +10,7 @@ GeminiProvider   Google AI Studio via google-genai. `prepare` uploads the rules 
 AzureProvider    Azure OpenAI via the openai SDK. Prompt caching is automatic for
                  repeated prefixes, so `prepare` returns None; usage reports how
                  many prompt tokens were served from cache.
+OpenAIProvider   platform.openai.com with a plain OPENAI_API_KEY; same behaviour.
 """
 from __future__ import annotations
 
@@ -143,35 +144,18 @@ class GeminiProvider:
 
 
 # ---------------------------------------------------------------------------
-# Azure OpenAI
+# OpenAI-compatible providers (Azure OpenAI and platform.openai.com)
 # ---------------------------------------------------------------------------
 
 
-class AzureProvider:
-    name = "azure"
+class _OpenAICompatProvider:
+    """Shared generate/retry logic. Subclasses build `self._client` and set
+    `self.model`, `self.reasoning_effort`, `self.temperature`."""
 
-    def __init__(self, model: str = config.AZURE_OPENAI_DEPLOYMENT, use_cache: bool = True):
-        key = os.getenv("AZURE_OPENAI_API_KEY")
-        endpoint = config.AZURE_OPENAI_ENDPOINT
-        if not key or not endpoint:
-            raise SystemExit("AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT must be set in the repo-root .env.")
-        self.model = model  # the deployment name
-        self.use_cache = use_cache  # informational: Azure caches prefixes automatically
-        endpoint = endpoint.strip().rstrip("/")
-        if "/openai/v1" in endpoint:
-            # New Foundry portal form: https://<resource>.services.ai.azure.com/openai/v1/responses
-            # The v1 API takes no api-version; use the plain OpenAI client with a base_url.
-            from openai import OpenAI
-            base_url = endpoint.split("/openai/v1")[0] + "/openai/v1/"
-            self._client = OpenAI(api_key=key, base_url=base_url, max_retries=0)
-            self.endpoint_style = "v1"
-        else:
-            # Classic form: https://<resource>.openai.azure.com (+ api-version query parameter)
-            from openai import AzureOpenAI
-            self._client = AzureOpenAI(api_key=key, azure_endpoint=endpoint,
-                                       api_version=config.AZURE_OPENAI_API_VERSION, max_retries=0)
-            self.endpoint_style = "classic"
-        log.info("Azure OpenAI client: %s endpoint, deployment %s", self.endpoint_style, model)
+    name = "openai-compat"
+    model = ""
+    reasoning_effort: str | None = None
+    temperature: str | None = None
 
     def prepare(self, system_instruction: str, slideshow: str, run_tag: str) -> None:
         return None  # automatic prefix caching; nothing to create
@@ -190,10 +174,10 @@ class AzureProvider:
             response_format=ScoringResult,
             max_completion_tokens=config.MAX_OUTPUT_TOKENS,
         )
-        if config.AZURE_OPENAI_REASONING_EFFORT:
-            kwargs["reasoning_effort"] = config.AZURE_OPENAI_REASONING_EFFORT
-        if config.AZURE_OPENAI_TEMPERATURE is not None:
-            kwargs["temperature"] = float(config.AZURE_OPENAI_TEMPERATURE)
+        if self.reasoning_effort:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        if self.temperature is not None:
+            kwargs["temperature"] = float(self.temperature)
         completion = self._client.chat.completions.parse(**kwargs)
         choice = completion.choices[0]
         if getattr(choice.message, "refusal", None):
@@ -227,10 +211,58 @@ class AzureProvider:
         return 0.0
 
 
+class OpenAIProvider(_OpenAICompatProvider):
+    """platform.openai.com (or any OpenAI-compatible base URL via OPENAI_BASE_URL)."""
+    name = "openai"
+
+    def __init__(self, model: str = config.OPENAI_MODEL, use_cache: bool = True):
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise SystemExit("OPENAI_API_KEY is not set. Put it in a .env file at the repo root.")
+        from openai import OpenAI
+        self.model = model
+        self.use_cache = use_cache
+        self.reasoning_effort = config.OPENAI_REASONING_EFFORT
+        self.temperature = config.OPENAI_TEMPERATURE
+        self._client = OpenAI(api_key=key, base_url=config.OPENAI_BASE_URL or None, max_retries=0)
+        log.info("OpenAI client: %s, model %s", config.OPENAI_BASE_URL or "api.openai.com", model)
+
+
+class AzureProvider(_OpenAICompatProvider):
+    name = "azure"
+
+    def __init__(self, model: str = config.AZURE_OPENAI_DEPLOYMENT, use_cache: bool = True):
+        key = os.getenv("AZURE_OPENAI_API_KEY")
+        endpoint = config.AZURE_OPENAI_ENDPOINT
+        if not key or not endpoint:
+            raise SystemExit("AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT must be set in the repo-root .env.")
+        self.model = model  # the deployment name
+        self.use_cache = use_cache  # informational: Azure caches prefixes automatically
+        self.reasoning_effort = config.AZURE_OPENAI_REASONING_EFFORT
+        self.temperature = config.AZURE_OPENAI_TEMPERATURE
+        endpoint = endpoint.strip().rstrip("/")
+        if "/openai/v1" in endpoint:
+            # New Foundry portal form: https://<resource>.services.ai.azure.com/openai/v1/responses
+            # The v1 API takes no api-version; use the plain OpenAI client with a base_url.
+            from openai import OpenAI
+            base_url = endpoint.split("/openai/v1")[0] + "/openai/v1/"
+            self._client = OpenAI(api_key=key, base_url=base_url, max_retries=0)
+            self.endpoint_style = "v1"
+        else:
+            # Classic form: https://<resource>.openai.azure.com (+ api-version query parameter)
+            from openai import AzureOpenAI
+            self._client = AzureOpenAI(api_key=key, azure_endpoint=endpoint,
+                                       api_version=config.AZURE_OPENAI_API_VERSION, max_retries=0)
+            self.endpoint_style = "classic"
+        log.info("Azure OpenAI client: %s endpoint, deployment %s", self.endpoint_style, model)
+
+
 def make_provider(name: str = config.PROVIDER, model: str | None = None, use_cache: bool = True):
     name = name.lower()
     if name == "gemini":
         return GeminiProvider(model or config.GEMINI_MODEL, use_cache)
     if name == "azure":
         return AzureProvider(model or config.AZURE_OPENAI_DEPLOYMENT, use_cache)
-    raise SystemExit(f"unknown provider {name!r}; use 'gemini' or 'azure'")
+    if name == "openai":
+        return OpenAIProvider(model or config.OPENAI_MODEL, use_cache)
+    raise SystemExit(f"unknown provider {name!r}; use 'azure', 'openai' or 'gemini'")

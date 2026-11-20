@@ -1,7 +1,7 @@
 """Command-line entry point for the free-recall scoring pipeline.
 
     python scripts/run_pipeline.py init   [--sessions 1] [--slideshows Summer] [--participants 101 102]
-    python scripts/run_pipeline.py run    [--provider azure|gemini] [--model NAME] [--workers 8] [--rpm 60] [--limit 5]
+    python scripts/run_pipeline.py run    [--provider azure|openai|gemini] [--model NAME] [--workers 8] [--rpm 60] [--limit 5]
     python scripts/run_pipeline.py status
     python scripts/run_pipeline.py export [--excel]
     python scripts/run_pipeline.py preview --participant 101 --session 1 --slideshow Summer
@@ -103,8 +103,8 @@ def main(argv=None) -> None:
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("run", help="score pending jobs (serial with --workers 1, parallel otherwise)")
-    s.add_argument("--provider", default=config.PROVIDER, choices=["gemini", "azure"])
-    s.add_argument("--model", help="Gemini model name or Azure deployment name (default from .env)")
+    s.add_argument("--provider", default=config.PROVIDER, choices=["azure", "openai", "gemini"])
+    s.add_argument("--model", help="Azure deployment name, OpenAI model name, or Gemini model name (default from .env)")
     s.add_argument("--workers", type=int, default=config.WORKERS)
     s.add_argument("--rpm", type=int, default=config.REQUESTS_PER_MINUTE)
     s.add_argument("--limit", type=int, help="score at most N jobs (smoke test)")
@@ -126,7 +126,7 @@ def main(argv=None) -> None:
     s.set_defaults(func=cmd_preview)
 
     s = sub.add_parser("clean-caches", help="delete any context caches recorded for this run")
-    s.add_argument("--provider", default=config.PROVIDER, choices=["gemini", "azure"])
+    s.add_argument("--provider", default=config.PROVIDER, choices=["azure", "openai", "gemini"])
     s.set_defaults(func=cmd_clean_caches)
 
     args = p.parse_args(argv)

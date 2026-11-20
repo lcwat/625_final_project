@@ -36,9 +36,15 @@ OUTPUT_DIR = REPO_ROOT / "model_output"
 DB_PATH = Path(os.getenv("RECALL_DB", OUTPUT_DIR / "recall_scoring.sqlite"))
 
 # ---- provider / model --------------------------------------------------
-# "gemini" (Google AI Studio, explicit context caches) or "azure" (Azure OpenAI,
-# automatic prompt caching). Auto-detected from which key is present.
-_default_provider = "azure" if os.getenv("AZURE_OPENAI_API_KEY") and not os.getenv("GEMINI_API_KEY") else "gemini"
+# "azure" (Azure OpenAI), "openai" (platform.openai.com) or "gemini" (Google AI
+# Studio). Auto-detected from which key is present, in that order; override
+# with RECALL_PROVIDER or --provider.
+if os.getenv("AZURE_OPENAI_API_KEY"):
+    _default_provider = "azure"
+elif os.getenv("OPENAI_API_KEY"):
+    _default_provider = "openai"
+else:
+    _default_provider = "gemini"
 PROVIDER = os.getenv("RECALL_PROVIDER", _default_provider).lower()
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
@@ -53,7 +59,13 @@ AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5")   # depl
 AZURE_OPENAI_REASONING_EFFORT = os.getenv("AZURE_OPENAI_REASONING_EFFORT", "medium")  # gpt-5 / o-series only
 AZURE_OPENAI_TEMPERATURE = os.getenv("AZURE_OPENAI_TEMPERATURE")   # leave unset for reasoning models
 
-MODEL = os.getenv("RECALL_MODEL", AZURE_OPENAI_DEPLOYMENT if PROVIDER == "azure" else GEMINI_MODEL)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")                       # model name on platform.openai.com
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")                          # leave unset for api.openai.com
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", AZURE_OPENAI_REASONING_EFFORT)
+OPENAI_TEMPERATURE = os.getenv("OPENAI_TEMPERATURE")                    # leave unset for reasoning models
+
+_DEFAULT_MODEL = {"azure": AZURE_OPENAI_DEPLOYMENT, "openai": OPENAI_MODEL, "gemini": GEMINI_MODEL}
+MODEL = os.getenv("RECALL_MODEL", _DEFAULT_MODEL.get(PROVIDER, GEMINI_MODEL))
 MAX_OUTPUT_TOKENS = int(os.getenv("RECALL_MAX_OUTPUT_TOKENS", "16384"))
 
 # ---- concurrency / retries --------------------------------------------

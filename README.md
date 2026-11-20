@@ -11,6 +11,7 @@ In order to get the minimal working example running on your machine, you must ha
 
 4. Then, you should activate the virtual environment (varies by terminal, machine, etc.), I'll show how I do it through bash/Linux (also works for Unix/Mac terminal):
 - ```source .venv/bin/activate```
+- On Windows PowerShell instead: ```Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned; .\.venv\Scripts\Activate.ps1```
 
 5. Last, you can easily download all of the module dependencies by loading in the requirements.txt file:
 - ```python -m pip install -r requirements.txt```
@@ -30,7 +31,7 @@ How it works:
 - **The model only makes the judgment calls.** Its instructions are Mohsen's scoring rules (`prompts/scoring_rules.md`, copied from the PDF) followed by one slideshow's event codebook. It returns JSON matching a strict schema (`schema.py`): per event, the recalled details with a verbatim quote for each of the seven rubric categories, the de-duplicated unique details, and notes. Counts, the remembered flag, TOTAL rows and summaries are computed in Python so they are always consistent.
 - **Every quote is checked against the transcript.** Responses with the wrong set of events are retried; quotes that are not in the transcript and other oddities are kept but flagged in a `ValidationFlags` column for a human look.
 - **The rubric is sent once, not every call.** The rules + codebook are identical for every transcript of a slideshow. On Azure OpenAI that prefix is cached automatically (usage shows `cached_tokens`); on Gemini it is uploaded once as a context cache and referenced by handle.
-- **Two providers, one scorer.** `--provider azure` (Azure OpenAI, default when only an Azure key is in `.env`) or `--provider gemini` (Google AI Studio).
+- **Three providers, one scorer.** `--provider azure` (Azure OpenAI), `--provider openai` (a plain platform.openai.com key) or `--provider gemini` (Google AI Studio). The provider is auto-detected from which key is in `.env`, in that order.
 - **A SQLite job queue** (`model_output/recall_scoring.sqlite`, gitignored) tracks every job, so a run can be stopped and resumed, failed jobs retried, and several provider/model/prompt configurations kept side by side under different `--run-tag`s.
 - **Parallel workers** share a requests-per-minute limiter and exponential backoff that honours `Retry-After`. `--workers 1` is the serial baseline for the write-up.
 
@@ -42,6 +43,14 @@ AZURE_OPENAI_ENDPOINT=https://<resource>.services.ai.azure.com/openai/v1/respons
 AZURE_OPENAI_DEPLOYMENT=gpt-5            # deployment name
 AZURE_OPENAI_API_VERSION=2025-04-01-preview   # only used with the classic https://<resource>.openai.azure.com endpoint form
 AZURE_OPENAI_REASONING_EFFORT=medium     # gpt-5 / o-series only; leave temperature unset for those
+```
+
+`.env` for a plain OpenAI key (e.g. a lab account on platform.openai.com):
+
+```
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-5                       # any model that supports structured outputs
+OPENAI_REASONING_EFFORT=medium           # gpt-5 / o-series only; leave temperature unset for those
 ```
 
 `.env` for Gemini: `GEMINI_API_KEY=...` and optionally `GEMINI_MODEL`, `GEMINI_TEMPERATURE`, `GEMINI_THINKING_BUDGET`.

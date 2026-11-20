@@ -9,12 +9,15 @@ with a second `ID` header row partway down separating the two age cohorts
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable
 
 import pandas as pd
 
 from . import config
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,9 @@ def load_transcripts(
     participants: Iterable[int] | None = None,
     master_file=config.MASTER_FILE,
 ) -> list[Transcript]:
-    """Read every non-empty (participant, session, slideshow) cell."""
+    """Read every scoreable (participant, session, slideshow) cell.
+    Placeholder cells (shorter than MIN_TRANSCRIPT_CHARS) and duplicate
+    participant rows are skipped and logged."""
     sessions = set(sessions) if sessions else set(config.FREE_RECALL_SHEETS)
     slideshows = set(slideshows) if slideshows else set(config.SLIDESHOWS)
     participants = set(participants) if participants else None
@@ -64,18 +69,21 @@ def load_transcripts(
         df = pd.read_excel(master_file, sheet_name=sheet, header=None)
         header = [str(h).strip().upper() if not pd.isna(h) else "" for h in df.iloc[0]]
         col_for = {name: header.index(name.upper()) for name in slideshows if name.upper() in header}
+        seen: set[tuple[int, str]] = set()
         for _, row in df.iloc[1:].iterrows():
             pid = _clean_id(row.iloc[0])
             if pid is None or (participants and pid not in participants):
                 continue
             for name, col in col_for.items():
                 cell = row.iloc[col]
-                if pd.isna(cell):
-                    continue
-                text = str(cell).replace("\xa0", " ").strip()
-                if not text:
-                    continue
-                out.append(Transcript(pid, session, name, text))
+                text = "" if pd.isna(cell) else str(cell).replace("\xa0", " ").strip()
+                if (pid, name) in seen:
+                    log.warning("S%d %s %s: duplicate participant row skipped", session, pid, name)
+                elif len(text) < config.MIN_TRANSCRIPT_CHARS:
+                    log.debug("S%d %s %s: no transcript (%r)", session, pid, name, text)
+                else:
+                    seen.add((pid, name))
+                    out.append(Transcript(pid, session, name, text))
     return out
 
 

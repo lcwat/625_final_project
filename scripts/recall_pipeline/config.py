@@ -22,24 +22,39 @@ RUBRIC_FILES = {
 SLIDESHOWS = list(RUBRIC_FILES)
 EXPECTED_EVENT_COUNTS = {"Bean": 18, "Oscar": 17, "Shaun": 17, "Summer": 9}
 
-# Master-file sheet name per session. Column headers are upper-case there.
+# Mohsen's scoring rules, copied from the PDF, sent as the model's instructions.
+RULES_FILE = REPO_ROOT / "prompts" / "scoring_rules.md"
+
+# Master-file sheet name per session (the cleaned free-recall sheets, ~41
+# participants; the "Transcriptions" sheets cover only about a dozen).
 FREE_RECALL_SHEETS = {1: "S1 FreeRecall", 2: "S2 Free Recall", 3: "S3 FreeRecall"}
+# Cells shorter than this are placeholders ("x", "N/A", "MISSING"), not recall.
+MIN_TRANSCRIPT_CHARS = 25
 
 # ---- outputs -----------------------------------------------------------
 OUTPUT_DIR = REPO_ROOT / "model_output"
 DB_PATH = Path(os.getenv("RECALL_DB", OUTPUT_DIR / "recall_scoring.sqlite"))
 
-# ---- model / API -------------------------------------------------------
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
-MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "16384"))
-# Optional thinking budget; leave unset to use the model default.
-THINKING_BUDGET = os.getenv("GEMINI_THINKING_BUDGET")
+# ---- provider / model --------------------------------------------------
+# "gemini" (Google AI Studio, explicit context caches) or "azure" (Azure OpenAI,
+# automatic prompt caching). Auto-detected from which key is present.
+_default_provider = "azure" if os.getenv("AZURE_OPENAI_API_KEY") and not os.getenv("GEMINI_API_KEY") else "gemini"
+PROVIDER = os.getenv("RECALL_PROVIDER", _default_provider).lower()
 
-# Context cache lifetime. Long enough to cover a full run; caches are deleted
-# explicitly at the end of a run anyway.
-CACHE_TTL_SECONDS = int(os.getenv("GEMINI_CACHE_TTL", str(2 * 60 * 60)))
-CACHE_DISPLAY_PREFIX = os.getenv("GEMINI_CACHE_PREFIX", "ao25-freerecall")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.0"))
+GEMINI_THINKING_BUDGET = os.getenv("GEMINI_THINKING_BUDGET")  # unset = model default
+GEMINI_CACHE_TTL_SECONDS = int(os.getenv("GEMINI_CACHE_TTL", str(2 * 60 * 60)))
+GEMINI_CACHE_DISPLAY_PREFIX = os.getenv("GEMINI_CACHE_PREFIX", "ao25-freerecall")
+
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")          # https://<resource>.openai.azure.com
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5")   # deployment name, not model name
+AZURE_OPENAI_REASONING_EFFORT = os.getenv("AZURE_OPENAI_REASONING_EFFORT", "medium")  # gpt-5 / o-series only
+AZURE_OPENAI_TEMPERATURE = os.getenv("AZURE_OPENAI_TEMPERATURE")   # leave unset for reasoning models
+
+MODEL = os.getenv("RECALL_MODEL", AZURE_OPENAI_DEPLOYMENT if PROVIDER == "azure" else GEMINI_MODEL)
+MAX_OUTPUT_TOKENS = int(os.getenv("RECALL_MAX_OUTPUT_TOKENS", "16384"))
 
 # ---- concurrency / retries --------------------------------------------
 WORKERS = int(os.getenv("RECALL_WORKERS", "8"))
@@ -48,6 +63,6 @@ MAX_ATTEMPTS = int(os.getenv("RECALL_MAX_ATTEMPTS", "6"))
 BACKOFF_BASE_SECONDS = float(os.getenv("RECALL_BACKOFF_BASE", "2"))
 BACKOFF_MAX_SECONDS = float(os.getenv("RECALL_BACKOFF_MAX", "90"))
 
-# A tag written into every result row so repeated runs (different prompt
-# versions, models, temperatures) can coexist in one database.
+# A tag written into every result row so repeated runs (different providers,
+# models, prompt versions) can coexist in one database.
 RUN_TAG = os.getenv("RECALL_RUN_TAG", "default")

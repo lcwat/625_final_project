@@ -21,40 +21,43 @@ In order to get the minimal working example running on your machine, you must ha
 - **```/prompts```** This is where the scoring rules sent to the model as its instructions reside.
 - **```/model_output```** This is where the final ```.csv``` output files will reside.
 
-## Scoring the real transcripts
+## Scoring the real transcripts (`scripts/recall_pipeline`)
 
-```scripts/score_free_recall.py``` scores the transcripts in ```mohsen_files``` against the event codebooks, one participant and slideshow per API call. Run it from the root of the repository:
-
-- ```python scripts/score_free_recall.py --dry-run``` lists what would be sent without calling the API.
-- ```python scripts/score_free_recall.py --session 1 --participants 101 --slideshows Summer``` scores a single transcript.
-- ```python scripts/score_free_recall.py --session 1``` scores every Session 1 transcript.
-
-Each response is saved under ```model_output/raw``` so a rerun skips transcripts that are already scored (use ```--force``` to score them again). The combined table is written to ```model_output/<model>_S<session>_scoring_long.csv```.
-
-_The parallel pipeline below was built independently and overlaps with `score_free_recall.py`; the two are being reconciled._
-
-## Scoring pipeline (`scripts/recall_pipeline`)
-
-The notebook above is the minimal example. The real pipeline lives in `scripts/recall_pipeline/` and is driven by `scripts/run_pipeline.py`. It scores every (participant, session, slideshow) free-recall transcript in `mohsen_files/Ao25_MasterFile_FreeRecall_MD.xlsx` against the matching event codebook in the `*_Rubric_Workbook.xlsx` files.
+`scripts/run_pipeline.py` scores the transcripts in `mohsen_files` against the event codebooks, one participant and slideshow per model call, serially or in parallel. Run it from the root of the repository.
 
 How it works:
 
-- **One API call per transcript.** The model returns JSON that must match a Pydantic schema (`schema.py`): per event, the recalled details and verbatim evidence for each of the seven rubric categories, the de-duplicated unique details, and a remembered flag. Counts, TOTAL rows and summaries are computed in Python from those lists so they are always consistent.
-- **The rubric is cached, not re-sent.** At the start of a run the scoring rules plus one slideshow's codebook are uploaded once as a Gemini context cache (`caching.py`), and every call references the cache handle. If a cache cannot be created the same text is sent inline, so results are identical either way.
-- **A SQLite job queue** (`model_output/recall_scoring.sqlite`) tracks every job, so a run can be stopped and resumed, failed jobs can be retried, and several model/prompt configurations can live side by side under different `--run-tag`s.
-- **Parallel workers** share a requests-per-minute limiter and exponential backoff on 429/5xx (`scorer.py`, `runner.py`).
+- **The model only makes the judgment calls.** Its instructions are Mohsen's scoring rules (`prompts/scoring_rules.md`, copied from the PDF) followed by one slideshow's event codebook. It returns JSON matching a strict schema (`schema.py`): per event, the recalled details with a verbatim quote for each of the seven rubric categories, the de-duplicated unique details, and notes. Counts, the remembered flag, TOTAL rows and summaries are computed in Python so they are always consistent.
+- **Every quote is checked against the transcript.** Responses with the wrong set of events are retried; quotes that are not in the transcript and other oddities are kept but flagged in a `ValidationFlags` column for a human look.
+- **The rubric is sent once, not every call.** The rules + codebook are identical for every transcript of a slideshow. On Azure OpenAI that prefix is cached automatically (usage shows `cached_tokens`); on Gemini it is uploaded once as a context cache and referenced by handle.
+- **Two providers, one scorer.** `--provider azure` (Azure OpenAI, default when only an Azure key is in `.env`) or `--provider gemini` (Google AI Studio).
+- **A SQLite job queue** (`model_output/recall_scoring.sqlite`, gitignored) tracks every job, so a run can be stopped and resumed, failed jobs retried, and several provider/model/prompt configurations kept side by side under different `--run-tag`s.
+- **Parallel workers** share a requests-per-minute limiter and exponential backoff that honours `Retry-After`. `--workers 1` is the serial baseline for the write-up.
 
-Typical use (after the setup steps above):
+`.env` for Azure OpenAI:
+
+```
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_ENDPOINT=https://<resource>.services.ai.azure.com/openai/v1/responses   # as shown on the deployment's Details tab
+AZURE_OPENAI_DEPLOYMENT=gpt-5            # deployment name
+AZURE_OPENAI_API_VERSION=2025-04-01-preview   # only used with the classic https://<resource>.openai.azure.com endpoint form
+AZURE_OPENAI_REASONING_EFFORT=medium     # gpt-5 / o-series only; leave temperature unset for those
+```
+
+`.env` for Gemini: `GEMINI_API_KEY=...` and optionally `GEMINI_MODEL`, `GEMINI_TEMPERATURE`, `GEMINI_THINKING_BUDGET`.
+
+Typical use:
 
 ```
 python scripts/run_pipeline.py preview --participant 101 --session 1 --slideshow Summer   # see the exact prompt, no API call
-python scripts/run_pipeline.py init                                                       # load all transcripts as jobs
-python scripts/run_pipeline.py run --limit 5                                              # smoke test
-python scripts/run_pipeline.py run --workers 8 --rpm 60                                   # full run (resumable)
+python scripts/run_pipeline.py init                                                       # load all transcripts as jobs (or --sessions 1)
+python scripts/run_pipeline.py run --limit 3                                              # smoke test
+python scripts/run_pipeline.py run --workers 1  --run-tag serial                          # serial baseline
+python scripts/run_pipeline.py run --workers 8  --run-tag parallel --rpm 60               # parallel run (resumable)
 python scripts/run_pipeline.py status
 python scripts/run_pipeline.py export --excel                                             # CSVs + per-session .xlsx in model_output/
 ```
 
-Useful environment variables (put them in `.env`): `GEMINI_MODEL`, `GEMINI_TEMPERATURE`, `GEMINI_THINKING_BUDGET`, `RECALL_WORKERS`, `RECALL_RPM`, `RECALL_RUN_TAG`.
+Other knobs via `.env`: `RECALL_WORKERS`, `RECALL_RPM`, `RECALL_RUN_TAG`, `RECALL_MAX_OUTPUT_TOKENS`.
 
-Outputs in `model_output/`: `<run>_scoring_long.csv` (participant-response row, one row per event, TOTAL row per block, in the column layout from the scoring prompt), `<run>_summary.csv` (per participant x slideshow totals plus a session total), `<run>_run_stats.csv` (tokens, cached tokens, latency, attempts per job, for the parallelism write-up), and optionally `<run>_session{N}.xlsx`.
+Outputs in `model_output/`: `<run>_scoring_long.csv` (per participant x slideshow: a participant-response row, one row per event in the column layout from the scoring prompt, a TOTAL row), `<run>_summary.csv` (totals per participant x slideshow plus a session total), `<run>_run_stats.csv` (provider, tokens, cached tokens, latency, attempts, flags per job, for the parallelism write-up), and optionally `<run>_session{N}.xlsx`.

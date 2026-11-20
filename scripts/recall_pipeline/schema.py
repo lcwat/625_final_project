@@ -1,79 +1,60 @@
 """Structured output the model must return for one (participant, slideshow).
 
-Counts, totals, and summary rows are deliberately NOT part of the schema:
-they are derived in Python from the lists below so they are always
-internally consistent (see export.py).
+The model only makes the judgment calls: which rubric details were recalled,
+for which event, with a verbatim quote. Counts, the remembered flag, totals
+and output formatting are computed in Python (export.py) so they are always
+internally consistent. Field names match how prompts/scoring_rules.md
+explains the JSON to the model, so change them together.
+
+No field has a default: Azure OpenAI strict structured output requires every
+property to be present, and Gemini's response_schema behaves the same way.
 """
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 
-class CategoryMatch(BaseModel):
-    recalled: list[str] = Field(
-        default_factory=list,
-        description="Distinct rubric details from this category the participant "
-                    "recalled, as short standardized labels taken from the codebook. "
-                    "Empty if nothing in this category was recalled.",
-    )
-    evidence: list[str] = Field(
-        default_factory=list,
-        description="Exact participant wording supporting each recalled detail, "
-                    "quoted verbatim from the transcript (shortest phrase that "
-                    "clearly supports the match). Same length and order as `recalled`.",
-    )
+class Detail(BaseModel):
+    detail: str = Field(description="Short standard label for the recalled detail, following the codebook wording.")
+    evidence: str = Field(description="Exact continuous wording copied from the transcript that supports the detail.")
 
 
 class EventScore(BaseModel):
-    event_id: int = Field(description="EventID from the codebook.")
-    gist: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against GistLabel.")
-    objects: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against Object.")
-    actions: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against Action.")
-    persons: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against Person_Character.")
-    locations: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against Location.")
-    goals: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against Goal.")
-    other_details: CategoryMatch = Field(default_factory=CategoryMatch, description="Matches against OtherRelevantDetails.")
+    event_id: str = Field(description="EventID exactly as it appears in the codebook.")
+    gist: list[Detail] = Field(description="Recalled details matching GistLabel.")
+    objects: list[Detail] = Field(description="Recalled details matching Object.")
+    actions: list[Detail] = Field(description="Recalled details matching Action.")
+    persons_characters: list[Detail] = Field(description="Recalled details matching Person_Character.")
+    locations: list[Detail] = Field(description="Recalled details matching Location.")
+    goals: list[Detail] = Field(description="Recalled details matching Goal.")
+    other_details: list[Detail] = Field(description="Recalled details matching OtherRelevantDetails.")
     unique_details: list[str] = Field(
-        default_factory=list,
-        description="Every distinct semantic detail recalled for this event, listed "
-                    "ONCE after removing repetition, synonym/paraphrase duplicates, "
-                    "and cross-category duplicates. Empty if the event was not recalled.",
+        description="Every distinct detail recalled for this event, listed once, after removing cross-category duplicates."
     )
-    event_remembered: bool = Field(
-        description="True if at least one valid, reliably assignable detail was "
-                    "recalled for this event (i.e. unique_details is non-empty).",
-    )
-    coder_notes: str = Field(
-        default="",
-        description="Ambiguity, hedged recall, self-corrections, or unmatched "
-                    "material relevant to this event. Empty string if none.",
+    coder_notes: str = Field(description="Judgment calls for this event. Empty when there is nothing to note.")
+
+
+class UnscoredUnit(BaseModel):
+    text: str = Field(description="The participant's wording that earned no credit.")
+    reason: str = Field(description="One of: unmatched, ambiguous, contradictory, vague, withdrawn.")
+    note: str = Field(description="Brief explanation, naming candidate events when ambiguous.")
+
+
+class ScoringResult(BaseModel):
+    events: list[EventScore] = Field(description="One entry per EventID in the codebook, in codebook order.")
+    unscored: list[UnscoredUnit] = Field(description="Substantive recall that was not credited to any event.")
+    scoring_problem: str = Field(
+        description="The exact problem if reliable scoring is impossible. Empty when scoring went ahead normally."
     )
 
 
-class SlideshowScore(BaseModel):
-    slideshow: str = Field(description="Slideshow name exactly as given.")
-    participant_id: int = Field(description="Participant ID exactly as given.")
-    events: list[EventScore] = Field(
-        description="Exactly one entry per EventID in the codebook, in EventID order, "
-                    "including events with nothing recalled.",
-    )
-    unmatched_recall: list[str] = Field(
-        default_factory=list,
-        description="Substantive participant statements that could not be matched to "
-                    "any event: not in the rubric, too vague, contradictory, or "
-                    "ambiguous across events. Each entry: the participant wording "
-                    "plus a short reason.",
-    )
-    coder_notes: str = Field(default="", description="Slideshow-level notes, if any.")
-
-
-# Mapping from schema attribute -> rubric field name / output column prefix.
-CATEGORY_FIELDS = {
-    "gist": ("GistLabel", "GistLabel"),
-    "objects": ("Object", "Object"),
-    "actions": ("Action", "Action"),
-    "persons": ("Person_Character", "PersonCharacter"),
-    "locations": ("Location", "Location"),
-    "goals": ("Goal", "Goal"),
-    "other_details": ("OtherRelevantDetails", "OtherRelevantDetails"),
-}
+# (field on EventScore, codebook column, output column prefix)
+CATEGORIES = (
+    ("gist", "GistLabel", "GistLabel"),
+    ("objects", "Object", "Object"),
+    ("actions", "Action", "Action"),
+    ("persons_characters", "Person_Character", "PersonCharacter"),
+    ("locations", "Location", "Location"),
+    ("goals", "Goal", "Goal"),
+    ("other_details", "OtherRelevantDetails", "OtherRelevantDetails"),
+)

@@ -4,7 +4,7 @@ Tables
 ------
 jobs      one row per (run_tag, participant, session, slideshow); tracks status
           so a run can be resumed and failures retried.
-results   the raw JSON returned by the model plus usage/latency metadata.
+results   the raw JSON returned by the model plus provider/usage/latency/flags.
 events    one row per scored event, flattened for easy querying/export.
 caches    context-cache handles created for a run so they can be reused/deleted.
 """
@@ -38,10 +38,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS results (
     run_tag          TEXT NOT NULL,
     job_id           TEXT NOT NULL,
+    provider         TEXT NOT NULL,
     model            TEXT NOT NULL,
     prompt_version   TEXT NOT NULL,
     used_cache       INTEGER NOT NULL,
     raw_json         TEXT NOT NULL,
+    flags            TEXT NOT NULL DEFAULT '',
     prompt_tokens    INTEGER,
     cached_tokens    INTEGER,
     output_tokens    INTEGER,
@@ -56,7 +58,7 @@ CREATE TABLE IF NOT EXISTS events (
     participant_id   INTEGER NOT NULL,
     session          INTEGER NOT NULL,
     slideshow        TEXT NOT NULL,
-    event_id         INTEGER NOT NULL,
+    event_id         TEXT NOT NULL,
     event_json       TEXT NOT NULL,
     details_count    INTEGER NOT NULL,
     event_remembered INTEGER NOT NULL,
@@ -64,11 +66,12 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS caches (
     run_tag     TEXT NOT NULL,
+    provider    TEXT NOT NULL,
     slideshow   TEXT NOT NULL,
     cache_name  TEXT NOT NULL,
     model       TEXT NOT NULL,
     created_at  TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (run_tag, slideshow)
+    PRIMARY KEY (run_tag, provider, slideshow)
 );
 """
 
@@ -96,11 +99,8 @@ class Store:
 
     # ---- jobs ---------------------------------------------------------
     def add_jobs(self, transcripts: list[Transcript], run_tag: str = config.RUN_TAG) -> int:
-        rows = [
-            (run_tag, t.job_id, t.participant_id, t.session, t.slideshow, t.cohort,
-             t.text, len(t.text.split()))
-            for t in transcripts
-        ]
+        rows = [(run_tag, t.job_id, t.participant_id, t.session, t.slideshow, t.cohort, t.text, len(t.text.split()))
+                for t in transcripts]
         with self.conn() as c:
             before = c.execute("SELECT COUNT(*) FROM jobs WHERE run_tag=?", (run_tag,)).fetchone()[0]
             c.executemany(
@@ -129,24 +129,24 @@ class Store:
                       (attempts, error[:2000], run_tag, job_id))
 
     # ---- results ------------------------------------------------------
-    def save_result(self, run_tag: str, job: sqlite3.Row, parsed: dict, raw_json: str,
-                    meta: dict, attempts: int) -> None:
+    def save_result(self, run_tag: str, job: sqlite3.Row, outcome, attempts: int) -> None:
+        meta = outcome.meta
         event_rows = [
             (run_tag, job["job_id"], job["participant_id"], job["session"], job["slideshow"],
-             int(ev["event_id"]), json.dumps(ev, ensure_ascii=False),
-             len(ev.get("unique_details") or []), int(bool(ev.get("event_remembered"))))
-            for ev in parsed["events"]
+             ev.event_id.strip(), ev.model_dump_json(), len(ev.unique_details), int(bool(ev.unique_details)))
+            for ev in outcome.result.events
         ]
         with self.conn() as c:
             c.execute("BEGIN")
             try:
                 c.execute(
-                    "INSERT OR REPLACE INTO results (run_tag, job_id, model, prompt_version, used_cache, "
-                    "raw_json, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, latency_s) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (run_tag, job["job_id"], meta["model"], meta["prompt_version"], int(meta["used_cache"]),
-                     raw_json, meta.get("prompt_tokens"), meta.get("cached_tokens"),
-                     meta.get("output_tokens"), meta.get("thinking_tokens"), meta.get("latency_s")))
+                    "INSERT OR REPLACE INTO results (run_tag, job_id, provider, model, prompt_version, used_cache, "
+                    "raw_json, flags, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, latency_s) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (run_tag, job["job_id"], meta["provider"], meta["model"], meta["prompt_version"],
+                     int(meta["used_cache"]), outcome.raw_json, " | ".join(outcome.flags),
+                     meta.get("prompt_tokens"), meta.get("cached_tokens"), meta.get("output_tokens"),
+                     meta.get("thinking_tokens"), meta.get("latency_s")))
                 c.execute("DELETE FROM events WHERE run_tag=? AND job_id=?", (run_tag, job["job_id"]))
                 c.executemany(
                     "INSERT INTO events (run_tag, job_id, participant_id, session, slideshow, event_id, "
@@ -162,22 +162,23 @@ class Store:
     def fetch_results(self, run_tag: str = config.RUN_TAG) -> list[sqlite3.Row]:
         with self.conn() as c:
             return c.execute(
-                "SELECT j.*, r.model, r.prompt_version, r.used_cache, r.raw_json, r.prompt_tokens, "
-                "r.cached_tokens, r.output_tokens, r.thinking_tokens, r.latency_s, r.scored_at "
+                "SELECT j.*, r.provider, r.model, r.prompt_version, r.used_cache, r.raw_json, r.flags, "
+                "r.prompt_tokens, r.cached_tokens, r.output_tokens, r.thinking_tokens, r.latency_s, r.scored_at "
                 "FROM jobs j JOIN results r ON j.run_tag=r.run_tag AND j.job_id=r.job_id "
-                "WHERE j.run_tag=? ORDER BY j.slideshow, j.session, j.participant_id", (run_tag,)).fetchall()
+                "WHERE j.run_tag=? ORDER BY j.session, j.participant_id, j.slideshow", (run_tag,)).fetchall()
 
     # ---- caches -------------------------------------------------------
-    def save_cache(self, run_tag: str, slideshow: str, cache_name: str, model: str) -> None:
+    def save_cache(self, run_tag: str, provider: str, slideshow: str, cache_name: str, model: str) -> None:
         with self.conn() as c:
-            c.execute("INSERT OR REPLACE INTO caches (run_tag, slideshow, cache_name, model) VALUES (?,?,?,?)",
-                      (run_tag, slideshow, cache_name, model))
+            c.execute("INSERT OR REPLACE INTO caches (run_tag, provider, slideshow, cache_name, model) "
+                      "VALUES (?,?,?,?,?)", (run_tag, provider, slideshow, cache_name, model))
 
-    def get_caches(self, run_tag: str) -> dict[str, str]:
+    def get_caches(self, run_tag: str, provider: str) -> dict[str, str]:
         with self.conn() as c:
-            rows = c.execute("SELECT slideshow, cache_name FROM caches WHERE run_tag=?", (run_tag,)).fetchall()
+            rows = c.execute("SELECT slideshow, cache_name FROM caches WHERE run_tag=? AND provider=?",
+                             (run_tag, provider)).fetchall()
         return {r["slideshow"]: r["cache_name"] for r in rows}
 
-    def delete_cache_rows(self, run_tag: str) -> None:
+    def delete_cache_rows(self, run_tag: str, provider: str) -> None:
         with self.conn() as c:
-            c.execute("DELETE FROM caches WHERE run_tag=?", (run_tag,))
+            c.execute("DELETE FROM caches WHERE run_tag=? AND provider=?", (run_tag, provider))

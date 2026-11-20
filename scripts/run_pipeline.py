@@ -1,0 +1,137 @@
+"""Command-line entry point for the free-recall scoring pipeline.
+
+    python scripts/run_pipeline.py init   [--sessions 1] [--slideshows Summer] [--participants 101 102]
+    python scripts/run_pipeline.py run    [--workers 8] [--rpm 60] [--limit 5] [--no-cache]
+    python scripts/run_pipeline.py status
+    python scripts/run_pipeline.py export [--excel]
+    python scripts/run_pipeline.py preview --participant 101 --session 1 --slideshow Summer
+    python scripts/run_pipeline.py clean-caches
+
+All commands accept --run-tag (default from RECALL_RUN_TAG or "default") so you
+can keep several model/prompt configurations side by side in one database.
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from recall_pipeline import config  # noqa: E402
+from recall_pipeline.data import load_transcripts  # noqa: E402
+from recall_pipeline.db import Store  # noqa: E402
+
+
+def cmd_init(args, store: Store) -> None:
+    ts = load_transcripts(sessions=args.sessions, slideshows=args.slideshows, participants=args.participants)
+    added = store.add_jobs(ts, args.run_tag)
+    print(f"Loaded {len(ts)} transcripts; {added} new jobs added to run '{args.run_tag}'.")
+    print("Status:", store.job_counts(args.run_tag))
+
+
+def cmd_status(args, store: Store) -> None:
+    counts = store.job_counts(args.run_tag)
+    print(f"Run '{args.run_tag}': {counts or 'no jobs'}")
+    failed = [j for j in store.pending_jobs(args.run_tag) if j["status"] == "failed"]
+    for j in failed[:20]:
+        print(f"  failed {j['job_id']} after {j['attempts']} attempts: {j['last_error'][:160]}")
+    if len(failed) > 20:
+        print(f"  ... and {len(failed) - 20} more")
+
+
+def cmd_run(args, store: Store) -> None:
+    from recall_pipeline.runner import run  # imported lazily: needs google-genai
+
+    summary = run(store, run_tag=args.run_tag, workers=args.workers, rpm=args.rpm,
+                  use_cache=not args.no_cache, keep_caches=args.keep_caches,
+                  retry_failed=not args.skip_failed, limit=args.limit, model=args.model)
+    print("Run summary:", summary)
+    print("Status:", store.job_counts(args.run_tag))
+
+
+def cmd_export(args, store: Store) -> None:
+    from recall_pipeline.export import export
+
+    for p in export(store, run_tag=args.run_tag, out_dir=args.out_dir, excel=args.excel, coder_id=args.coder_id):
+        print("wrote", p)
+
+
+def cmd_preview(args, store: Store) -> None:
+    """Print the exact prompt that would be sent for one job (no API call)."""
+    from recall_pipeline.prompt import build_system_instruction, build_user_content
+    from recall_pipeline.rubric import load_codebook
+
+    ts = load_transcripts(sessions=[args.session], slideshows=[args.slideshow], participants=[args.participant])
+    if not ts:
+        sys.exit("no transcript found for that participant/session/slideshow")
+    cb = load_codebook(args.slideshow)
+    system = build_system_instruction(cb)
+    user = build_user_content(ts[0].participant_id, ts[0].session, ts[0].slideshow, ts[0].text)
+    print("=" * 30, "SYSTEM INSTRUCTION (cached per slideshow)", "=" * 30)
+    print(system)
+    print("=" * 30, "USER CONTENT (per call)", "=" * 30)
+    print(user)
+    print("=" * 80)
+    print(f"approx words: system={len(system.split())}, user={len(user.split())}")
+
+
+def cmd_clean_caches(args, store: Store) -> None:
+    from recall_pipeline.runner import cleanup_caches, make_client
+
+    cleanup_caches(make_client(), store, args.run_tag)
+    print("caches removed for run", args.run_tag)
+
+
+def main(argv=None) -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--run-tag", default=config.RUN_TAG)
+    p.add_argument("--db", default=str(config.DB_PATH))
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("init", help="load transcripts into the job table")
+    s.add_argument("--sessions", type=int, nargs="*")
+    s.add_argument("--slideshows", nargs="*", choices=config.SLIDESHOWS)
+    s.add_argument("--participants", type=int, nargs="*")
+    s.set_defaults(func=cmd_init)
+
+    s = sub.add_parser("status", help="show job counts and failures")
+    s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("run", help="score pending jobs in parallel")
+    s.add_argument("--workers", type=int, default=config.WORKERS)
+    s.add_argument("--rpm", type=int, default=config.REQUESTS_PER_MINUTE)
+    s.add_argument("--model", default=config.MODEL)
+    s.add_argument("--limit", type=int, help="score at most N jobs (smoke test)")
+    s.add_argument("--no-cache", action="store_true", help="send the rubric inline instead of using context caches")
+    s.add_argument("--keep-caches", action="store_true", help="leave context caches alive after the run")
+    s.add_argument("--skip-failed", action="store_true", help="do not retry jobs that previously failed")
+    s.set_defaults(func=cmd_run)
+
+    s = sub.add_parser("export", help="write CSV (and optionally Excel) deliverables")
+    s.add_argument("--out-dir", default=str(config.OUTPUT_DIR))
+    s.add_argument("--excel", action="store_true")
+    s.add_argument("--coder-id", default="LLM")
+    s.set_defaults(func=cmd_export)
+
+    s = sub.add_parser("preview", help="print the prompt for one job without calling the API")
+    s.add_argument("--participant", type=int, required=True)
+    s.add_argument("--session", type=int, default=1)
+    s.add_argument("--slideshow", required=True, choices=config.SLIDESHOWS)
+    s.set_defaults(func=cmd_preview)
+
+    s = sub.add_parser("clean-caches", help="delete any context caches recorded for this run")
+    s.set_defaults(func=cmd_clean_caches)
+
+    args = p.parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    store = Store(Path(args.db))
+    args.func(args, store)
+
+
+if __name__ == "__main__":
+    main()

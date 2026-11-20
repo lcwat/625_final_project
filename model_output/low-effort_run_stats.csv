@@ -1,0 +1,4 @@
+﻿job_id,participant_id,session,slideshow,cohort,word_count,provider,model,prompt_version,used_cache,prompt_tokens,cached_tokens,output_tokens,thinking_tokens,latency_s,attempts,scored_at,flag_count
+101-S1-Summer,101,1,Summer,young,350,azure,gpt-5,rules-7573eb11.layout-2,0,11635,0,5324,3328,62.89,1,2026-11-20 17:42:50,0
+102-S1-Summer,102,1,Summer,young,121,azure,gpt-5,rules-7573eb11.layout-2,0,11411,0,4118,3008,48.11,1,2026-11-20 17:42:36,0
+103-S1-Summer,103,1,Summer,young,117,azure,gpt-5,rules-7573eb11.layout-2,0,11398,0,3319,2048,40.96,1,2026-11-20 17:42:30,0

@@ -1,0 +1,7 @@
+﻿ParticipantID,Session,Cohort,Slideshow,TotalEvents,EventsRemembered,EventsNotRemembered,GistLabel_Total,Object_Total,Action_Total,PersonCharacter_Total,Location_Total,Goal_Total,OtherRelevantDetails_Total,UniqueDetails_Total,UnscoredRecall_Count,ValidationFlag_Count,WordCount
+101,1,young,Summer,9,7,2,8,13,8,10,4,0,1,35,3,0,350
+101,1,young,SESSION1_TOTAL,9,7,2,8,13,8,10,4,0,1,35,3,0,350
+102,1,young,Summer,9,5,4,4,8,6,2,3,0,0,20,3,0,121
+102,1,young,SESSION1_TOTAL,9,5,4,4,8,6,2,3,0,0,20,3,0,121
+103,1,young,Summer,9,3,6,2,4,3,3,1,1,0,11,8,1,117
+103,1,young,SESSION1_TOTAL,9,3,6,2,4,3,3,1,1,0,11,8,1,117
